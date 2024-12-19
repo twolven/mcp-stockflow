@@ -29,6 +29,71 @@ cd stockflow
 
 ## Usage
 
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/mcp-stockflow.git
+cd mcp-stockflow
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Add to your Claude configuration:
+In your `claude-desktop-config.json`, add the following to the `mcpServers` section:
+
+```json
+{
+    "mcpServers": {
+        "stockflow": {
+            "command": "python",
+            "args": ["path/to/stockflow.py"]
+        }
+    }
+}
+```
+
+Replace "path/to/stockflow.py" with the full path to where you saved the stockflow.py file.
+
+## Usage Prompt for Claude
+
+When working with Claude, you can use this prompt to help it understand the available tools:
+
+"I've enabled the stockflow tools which give you access to stock market data. You can use these three main functions:
+
+1. `get_stock_data` - Get comprehensive stock info:
+```python
+{
+    "symbol": "AAPL",
+    "include_financials": true,  # optional
+    "include_analysis": true,    # optional
+    "include_calendar": true     # optional
+}
+```
+
+2. `get_historical_data` - Get price history and technical indicators:
+```python
+{
+    "symbol": "AAPL",
+    "period": "1y",        # 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
+    "interval": "1d",      # 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
+    "prepost": false       # optional - include pre/post market data
+}
+```
+
+3. `get_options_chain` - Get options data:
+```python
+{
+    "symbol": "AAPL",
+    "expiration_date": "2024-12-20",  # optional - uses nearest date if not specified
+    "include_greeks": true            # optional
+}
+```
+
+All responses include current price data, error handling, and comprehensive market information."
+
 ### Running the Server
 
 ```bash
