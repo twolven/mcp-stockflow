@@ -175,8 +175,8 @@ if __name__ == "__main__":
 
 ## Requirements
 
-- Python 3.8+
-- MCP SDK
+- Python 3.12+
+- mcp
 - yfinance
 
 ## Limitations
