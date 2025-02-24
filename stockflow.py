@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import logging
 import asyncio
 import yfinance as yf
@@ -260,7 +258,8 @@ async def call_tool(name: str, arguments: dict):
                 period=period,
                 interval=interval,
                 prepost=prepost,
-                progress=False
+                progress=False,
+                multi_level_index=False
             )
             
             if history.empty:
@@ -288,12 +287,15 @@ async def call_tool(name: str, arguments: dict):
             rs = (avg_gain / avg_loss).replace([np.inf, -np.inf], np.nan)
             data['RSI'] = 100 - (100 / (1 + rs))
             
+            # Convert index to string format for serialization
+            data.index = data.index.strftime('%Y-%m-%d %H:%M:%S')
+            
             # Convert to dict with records orientation
             history_dict = data.to_dict(orient='records')
             
             # Calculate summary statistics
-            price_change = float(history['Close'].iloc[-1] - history['Close'].iloc[0])
-            price_change_pct = (price_change / history['Close'].iloc[0]) * 100
+            price_change = float(data['Close'].iloc[-1] - data['Close'].iloc[0])
+            price_change_pct = (price_change / float(data['Close'].iloc[0])) * 100
             
             response = {
                 "symbol": symbol,
@@ -302,17 +304,17 @@ async def call_tool(name: str, arguments: dict):
                 "prepost": prepost,
                 "data": history_dict,
                 "summary": {
-                    "start_date": history.index[0],
-                    "end_date": history.index[-1],
-                    "total_days": len(history),
+                    "start_date": data.index[0],
+                    "end_date": data.index[-1],
+                    "total_days": len(data),
                     "price_change": price_change,
                     "price_change_percent": price_change_pct,
-                    "volatility": float(history['Close'].pct_change().std() * (252 ** 0.5) * 100),
-                    "highest_price": float(history['High'].max()),
-                    "lowest_price": float(history['Low'].min()),
-                    "average_volume": float(history['Volume'].mean()),
-                    "current_rsi": float(history['RSI'].iloc[-1]) if pd.notnull(history['RSI'].iloc[-1]) else None,
-                    "current_macd": float(history['MACD'].iloc[-1]) if pd.notnull(history['MACD'].iloc[-1]) else None
+                    "volatility": float(data['Close'].pct_change().std() * (252 ** 0.5) * 100),
+                    "highest_price": float(data['High'].max()),
+                    "lowest_price": float(data['Low'].min()),
+                    "average_volume": float(data['Volume'].mean()),
+                    "current_rsi": float(data['RSI'].iloc[-1]) if pd.notnull(data['RSI'].iloc[-1]) else None,
+                    "current_macd": float(data['MACD'].iloc[-1]) if pd.notnull(data['MACD'].iloc[-1]) else None
                 }
             }
             
