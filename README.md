@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/twolven-mcp-stockflow-badge.png)](https://mseep.ai/app/twolven-mcp-stockflow)
+
 # StockFlow MCP Server
 
 A Model Context Protocol (MCP) server providing real-time stock data and options analysis through Yahoo Finance. Enables LLMs to access market data, analyze stocks, and evaluate options strategies.
