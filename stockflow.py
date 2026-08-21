@@ -1,5 +1,8 @@
 import logging
 import asyncio
+import os
+import sys
+from mcp import os
 import yfinance as yf
 from mcp.server import Server
 from mcp.types import Tool, TextContent
@@ -39,8 +42,8 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("stockflow_v2.log"),
-        logging.StreamHandler()
+        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "stockflow_v2.log")),
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger("stockflow-server-v2")
