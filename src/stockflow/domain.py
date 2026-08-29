@@ -14,7 +14,7 @@ INTERVALS_PER_YEAR = {
     "90m": 252 * 4.33,
     "1h": 252 * 6.5,
     "1d": 252,
-    "5d": 52,
+    "5d": 50.4,
     "1wk": 52,
     "1mo": 12,
     "3mo": 4,
@@ -22,15 +22,31 @@ INTERVALS_PER_YEAR = {
 
 
 def wilder_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
-    delta = prices.astype(float).diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    result = 100 - 100 / (1 + avg_gain / avg_loss)
-    result = result.mask((avg_gain == 0) & (avg_loss == 0), 50.0)
-    result = result.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
-    return result.mask((avg_gain == 0) & (avg_loss > 0), 0.0)
+    """Wilder RSI seeded with simple averages of the first period."""
+    values = prices.astype(float)
+    delta = values.diff()
+    gains, losses = delta.clip(lower=0), -delta.clip(upper=0)
+    result = pd.Series(float("nan"), index=values.index, dtype=float)
+    if len(values) <= period:
+        return result
+    average_gain = gains.iloc[1 : period + 1].mean()
+    average_loss = losses.iloc[1 : period + 1].mean()
+
+    def score(gain: float, loss: float) -> float:
+        if gain == 0 and loss == 0:
+            return 50.0
+        if loss == 0:
+            return 100.0
+        if gain == 0:
+            return 0.0
+        return 100 - 100 / (1 + gain / loss)
+
+    result.iloc[period] = score(average_gain, average_loss)
+    for index in range(period + 1, len(values)):
+        average_gain = (average_gain * (period - 1) + gains.iloc[index]) / period
+        average_loss = (average_loss * (period - 1) + losses.iloc[index]) / period
+        result.iloc[index] = score(average_gain, average_loss)
+    return result
 
 
 def add_indicators(frame: pd.DataFrame) -> pd.DataFrame:
@@ -46,15 +62,21 @@ def add_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def annualized_volatility(prices: pd.Series, interval: str) -> float | None:
-    value = prices.astype(float).pct_change().std() * math.sqrt(INTERVALS_PER_YEAR[interval]) * 100
+def annualized_volatility(prices: pd.Series, interval: str, prepost: bool = False) -> float | None:
+    periods = INTERVALS_PER_YEAR[interval]
+    if prepost and interval in {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}:
+        periods *= 960 / 390
+    value = prices.astype(float).pct_change().std() * math.sqrt(periods) * 100
     return None if pd.isna(value) else float(value)
 
 
 def black_scholes_greeks(
     spot: float, strike: float, years: float, rate: float, volatility: float, kind: str
 ) -> dict[str, float] | None:
-    if min(spot, strike, years, volatility) <= 0:
+    if (
+        not all(math.isfinite(value) for value in (spot, strike, years, rate, volatility))
+        or min(spot, strike, years, volatility) <= 0
+    ):
         return None
     root = math.sqrt(years)
     d1 = (math.log(spot / strike) + (rate + volatility**2 / 2) * years) / (volatility * root)

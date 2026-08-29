@@ -1,13 +1,14 @@
 import math
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from .domain import add_indicators, annualized_volatility, black_scholes_greeks
-from .models import HistoryInput, OptionsInput, StockDataInput
-from .provider import YahooProvider, clean, envelope
+from .models import Expiration, Interval, Period, ResponseEnvelope, Symbol
+from .provider import ProviderError, YahooProvider, clean, envelope
 
 mcp = FastMCP("stockflow")
 provider = YahooProvider()
@@ -17,29 +18,28 @@ def _price(info):
     return info.get("currentPrice") or info.get("regularMarketPrice")
 
 
+def _normalized(symbol):
+    return symbol.strip().upper()
+
+
 @mcp.tool
 def get_stock_data_v2(
-    symbol: str,
+    symbol: Symbol,
     include_financials: bool = False,
     include_analysis: bool = False,
     include_calendar: bool = False,
-) -> dict:
+) -> ResponseEnvelope:
     """Get stock metadata and optional statements, analysis and calendar data."""
-    args = StockDataInput(
-        symbol=symbol,
-        include_financials=include_financials,
-        include_analysis=include_analysis,
-        include_calendar=include_calendar,
-    )
+    normalized = _normalized(symbol)
+    ticker = provider.ticker(normalized)
     try:
-        ticker = provider.ticker(args.symbol)
-        info = ticker.info or {}
+        info = provider.info(normalized, ticker) or {}
         if not _price(info):
-            raise ToolError(f"No valid quote available for {args.symbol}")
+            raise ToolError(f"No valid quote available for {normalized}")
         data = {
             "basic_info": {
-                k: info.get(v)
-                for k, v in {
+                key: info.get(source)
+                for key, source in {
                     "symbol": "symbol",
                     "name": "longName",
                     "sector": "sector",
@@ -50,8 +50,8 @@ def get_stock_data_v2(
                 }.items()
             },
             "market_data": {
-                k: info.get(v)
-                for k, v in {
+                key: info.get(source)
+                for key, source in {
                     "price": "currentPrice",
                     "currency": "currency",
                     "market_cap": "marketCap",
@@ -66,8 +66,8 @@ def get_stock_data_v2(
         }
         data["market_data"]["price"] = _price(info)
         data["valuation_metrics"] = {
-            k: info.get(v)
-            for k, v in {
+            key: info.get(source)
+            for key, source in {
                 "pe_ratio": "forwardPE",
                 "peg_ratio": "pegRatio",
                 "price_to_book": "priceToBook",
@@ -77,8 +77,8 @@ def get_stock_data_v2(
             }.items()
         }
         data["trading_info"] = {
-            k: info.get(v)
-            for k, v in {
+            key: info.get(source)
+            for key, source in {
                 "beta": "beta",
                 "52w_high": "fiftyTwoWeekHigh",
                 "52w_low": "fiftyTwoWeekLow",
@@ -88,38 +88,31 @@ def get_stock_data_v2(
                 "avg_volume": "averageVolume",
             }.items()
         }
-        if args.include_financials:
-            data["financials"] = {
-                "quarterly_income": ticker.quarterly_income_stmt,
-                "quarterly_balance": ticker.quarterly_balance_sheet,
-                "quarterly_cashflow": ticker.quarterly_cashflow,
-            }
-        if args.include_analysis:
-            data["analysis"] = {
-                "recommendations": ticker.recommendations,
-                "analyst_price_targets": ticker.analyst_price_targets,
-            }
-        if args.include_calendar:
-            data["calendar"] = ticker.calendar
+        if include_financials:
+            data["financials"] = provider.financials(normalized, ticker)
+        if include_analysis:
+            data["analysis"] = provider.analysis(normalized, ticker)
+        if include_calendar:
+            data["calendar"] = provider.calendar(normalized, ticker)
         return envelope(data)
     except ToolError:
         raise
-    except Exception as exc:
-        raise ToolError(f"Yahoo Finance request failed: {exc}") from exc
+    except (ProviderError, TimeoutError, ConnectionError, OSError) as exc:
+        raise ToolError(f"Yahoo Finance request failed after bounded retries: {exc}") from exc
 
 
 @mcp.tool
 def get_historical_data_v2(
-    symbol: str, period: str, interval: str = "1d", prepost: bool = False
-) -> dict:
+    symbol: Symbol, period: Period, interval: Interval = "1d", prepost: bool = False
+) -> ResponseEnvelope:
     """Get unadjusted/repaired price history and technical indicators."""
-    args = HistoryInput(symbol=symbol, period=period, interval=interval, prepost=prepost)
+    normalized = _normalized(symbol)
     try:
-        frame = provider.history(args.symbol, args.period, args.interval, args.prepost)
-    except Exception as exc:
-        raise ToolError(f"Yahoo Finance request failed: {exc}") from exc
+        frame = provider.history(normalized, period, interval, prepost)
+    except (ProviderError, TimeoutError, ConnectionError, OSError) as exc:
+        raise ToolError(f"Yahoo Finance request failed after bounded retries: {exc}") from exc
     if frame.empty:
-        raise ToolError(f"No historical data available for {args.symbol}")
+        raise ToolError(f"No historical data available for {normalized}")
     data = add_indicators(frame)
     records = data.reset_index().rename(columns={data.index.name or "index": "timestamp"})
     close = data["Close"]
@@ -129,97 +122,119 @@ def get_historical_data_v2(
         "total_rows": len(data),
         "price_change": float(close.iloc[-1] - close.iloc[0]),
         "price_change_percent": float((close.iloc[-1] / close.iloc[0] - 1) * 100),
-        "volatility": annualized_volatility(close, args.interval),
+        "volatility": annualized_volatility(close, interval, prepost),
         "highest_price": float(data["High"].max()),
         "lowest_price": float(data["Low"].min()),
         "average_volume": float(data["Volume"].mean()),
         "current_rsi": clean(data["RSI"].iloc[-1]),
         "current_macd": clean(data["MACD"].iloc[-1]),
     }
+    columns = [column for column in records.columns if column != "Adj Close"]
     return envelope(
         {
-            "symbol": args.symbol,
-            "period": args.period,
-            "interval": args.interval,
-            "prepost": args.prepost,
+            "symbol": normalized,
+            "period": period,
+            "interval": interval,
+            "prepost": prepost,
             "adjusted": False,
-            "data": records.to_dict("records"),
+            "adjusted_close_included": False,
+            "data": records[columns].to_dict("records"),
             "summary": summary,
         }
     )
 
 
+def _expiration_time(expiration: date, now: datetime | None = None) -> tuple[int, float]:
+    current = now or datetime.now(UTC)
+    close = datetime.combine(expiration, time(16), ZoneInfo("America/New_York"))
+    remaining = (close.astimezone(UTC) - current.astimezone(UTC)).total_seconds()
+    if remaining <= 0:
+        raise ToolError("Expiration has passed its 4:00 PM America/New_York close")
+    return max(
+        (expiration - current.astimezone(ZoneInfo("America/New_York")).date()).days, 0
+    ), remaining / (365 * 86400)
+
+
 @mcp.tool
 def get_options_chain_v2(
-    symbol: str, expiration_date: str | None = None, include_greeks: bool = False
-) -> dict:
-    """Get an option chain; optionally add theoretical European Black-Scholes Greeks."""
-    args = OptionsInput(
-        symbol=symbol, expiration_date=expiration_date, include_greeks=include_greeks
-    )
-    ticker = provider.ticker(args.symbol)
-    expirations = list(ticker.options or [])
-    if not expirations:
-        raise ToolError(f"No options data available for {args.symbol}")
-    expiration = args.expiration_date or expirations[0]
+    symbol: Symbol, expiration_date: Expiration | None = None, include_greeks: bool = False
+) -> ResponseEnvelope:
+    """Get an option chain and optionally add theoretical European Black-Scholes Greeks."""
+    normalized = _normalized(symbol)
+    ticker = provider.ticker(normalized)
     try:
-        exp = date.fromisoformat(expiration)
-    except ValueError as exc:
-        raise ToolError("Invalid date format. Use YYYY-MM-DD") from exc
-    today = datetime.now(UTC).date()
-    if exp < today:
-        raise ToolError("Expiration date must not be in the past")
-    if expiration not in expirations:
-        raise ToolError(f"No options available for date {expiration}")
-    info = ticker.info or {}
-    spot = _price(info)
-    if not spot or not math.isfinite(float(spot)):
-        raise ToolError("Could not determine a valid current stock price")
-    chain = ticker.option_chain(expiration)
-    years = max((exp - today).days, 1) / 365
+        expirations = provider.expirations(normalized, ticker)
+        if not expirations:
+            raise ToolError(f"No options data available for {normalized}")
+        expiration = expiration_date or expirations[0]
+        if expiration not in expirations:
+            raise ToolError(f"No options available for date {expiration}")
+        try:
+            exp = date.fromisoformat(expiration)
+        except ValueError as exc:
+            raise ToolError("Invalid date format. Use YYYY-MM-DD") from exc
+        dte, years = _expiration_time(exp)
+        info = provider.info(normalized, ticker) or {}
+        spot = _price(info)
+        if not spot or not math.isfinite(float(spot)):
+            raise ToolError("Could not determine a valid current stock price")
+        chain = provider.chain(normalized, expiration, ticker)
+        rate = 0.04
 
-    def process(frame: pd.DataFrame, kind: str):
-        out = frame.copy()
-        out["moneyness"] = out["strike"] / spot
-        midpoint = (out["bid"].fillna(0) + out["ask"].fillna(0)) / 2
-        out["bid_ask_spread"] = out["ask"] - out["bid"]
-        out["bid_ask_spread_pct"] = (out["bid_ask_spread"] / midpoint.where(midpoint > 0)) * 100
-        if args.include_greeks:
-            out["greeks"] = [
-                black_scholes_greeks(
-                    float(spot), float(row.strike), years, 0.04, float(row.impliedVolatility), kind
-                )
-                for row in out.itertuples()
-            ]
-        return out
+        def process(frame: pd.DataFrame, kind: str):
+            out = frame.copy()
+            out["moneyness"] = out["strike"] / spot
+            midpoint = (out["bid"].fillna(0) + out["ask"].fillna(0)) / 2
+            out["bid_ask_spread"] = out["ask"] - out["bid"]
+            out["bid_ask_spread_pct"] = (out["bid_ask_spread"] / midpoint.where(midpoint > 0)) * 100
+            if include_greeks:
+                out["greeks"] = [
+                    black_scholes_greeks(
+                        float(spot),
+                        float(row.strike),
+                        years,
+                        rate,
+                        float(row.impliedVolatility),
+                        kind,
+                    )
+                    for row in out.itertuples()
+                ]
+            return out
 
-    calls, puts = process(chain.calls, "call"), process(chain.puts, "put")
-    cv, pv = calls["volume"].fillna(0).sum(), puts["volume"].fillna(0).sum()
-    warnings = (
-        [
-            "Greeks are theoretical European Black-Scholes estimates; dividends and early assignment are not modeled."
-        ]
-        if args.include_greeks
-        else []
-    )
-    return envelope(
-        {
-            "symbol": args.symbol,
-            "underlying_price": spot,
-            "expiration_date": expiration,
-            "days_to_expiration": (exp - today).days,
-            "available_expiration_dates": expirations,
-            "summary": {
-                "total_volume": int(cv + pv),
-                "put_call_ratio": None if cv == 0 else float(pv / cv),
-                "total_calls": len(calls),
-                "total_puts": len(puts),
+        calls, puts = process(chain.calls, "call"), process(chain.puts, "put")
+        cv, pv = calls["volume"].fillna(0).sum(), puts["volume"].fillna(0).sum()
+        warnings = []
+        if include_greeks:
+            warnings.append(
+                "Greeks are theoretical European Black-Scholes estimates; dividends and early assignment are not modeled. Risk-free rate is a configured 4% fallback, not a fetched Treasury quote."
+            )
+        return envelope(
+            {
+                "symbol": normalized,
+                "underlying_price": spot,
+                "expiration_date": expiration,
+                "days_to_expiration": dte,
+                "available_expiration_dates": expirations,
+                "risk_free_rate": {
+                    "value": rate,
+                    "source": "configured fallback",
+                    "instrument": None,
+                },
+                "summary": {
+                    "total_volume": int(cv + pv),
+                    "put_call_ratio": None if cv == 0 else float(pv / cv),
+                    "total_calls": len(calls),
+                    "total_puts": len(puts),
+                },
+                "calls": calls.to_dict("records"),
+                "puts": puts.to_dict("records"),
             },
-            "calls": calls.to_dict("records"),
-            "puts": puts.to_dict("records"),
-        },
-        warnings,
-    )
+            warnings,
+        )
+    except ToolError:
+        raise
+    except (ProviderError, TimeoutError, ConnectionError, OSError) as exc:
+        raise ToolError(f"Yahoo Finance request failed after bounded retries: {exc}") from exc
 
 
 def main():
