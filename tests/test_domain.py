@@ -97,6 +97,11 @@ def test_prepost_and_missing_volatility():
     assert annualized_volatility(pd.Series([100.0]), "1d") is None
 
 
+def test_weekly_volatility_uses_hardcoded_52_periods():
+    prices = pd.Series([100.0, 101.0, 99.0, 102.0])
+    assert annualized_volatility(prices, "1wk") == pytest.approx(18.17351201185405, rel=1e-12)
+
+
 def test_greek_vectors_and_invalids():
     call = black_scholes_greeks(100, 100, 1, 0.04, 0.2, "call")
     put = black_scholes_greeks(100, 100, 1, 0.04, 0.2, "put")
