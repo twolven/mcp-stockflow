@@ -2,6 +2,7 @@
 
 ## 2.1.0
 
+- Validated `Host` and `Origin` headers on the Streamable HTTP transport so loopback deployments reject DNS-rebinding requests, configurable through `MCP_HOST_ORIGIN_PROTECTION`, `MCP_ALLOWED_HOSTS`, and `MCP_ALLOWED_ORIGINS`.
 - Migrated to typed FastMCP tools and a `src` package.
 - Added explicit yfinance download behavior, interval-aware volatility, Wilder RSI, timestamps, and optional theoretical Greeks.
 - Added controlled tool errors and provider/as-of/warning metadata.
