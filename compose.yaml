@@ -1,0 +1,10 @@
+name: mcp-stockflow
+services:
+  stockflow:
+    build:
+      context: .
+    image: mcp-stockflow:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MCP_HOST_PORT:-8000}:8000"

@@ -1,204 +1,48 @@
-# StockFlow MCP Server
+# StockFlow MCP
 
-A Model Context Protocol (MCP) server providing real-time stock data and options analysis through Yahoo Finance. Enables LLMs to access market data, analyze stocks, and evaluate options strategies.
+A typed FastMCP server for stock metadata, price history, technical indicators, financial statements, calendars, and option chains through yfinance. It supports local stdio and containerized Streamable HTTP transports.
 
-## Features
+## Tools
 
-### Stock Data
-- Real-time stock prices and key metrics
-- Historical price data with OHLC values
-- Company fundamentals and financial statements
-- Market indicators and ratios
+- `get_stock_data_v2(symbol, include_financials=False, include_analysis=False, include_calendar=False)`
+- `get_historical_data_v2(symbol, period, interval='1d', prepost=False)`
+- `get_options_chain_v2(symbol, expiration_date=None, include_greeks=False)`
 
-### Options Analysis
-- Complete options chain data
-- Greeks (delta, gamma, theta, vega)
-- Volume and open interest tracking
-- Options strategy analysis
+Historical downloads explicitly use unadjusted prices, repair enabled, timezone retention, a timeout, and a flat single-symbol index. Rows retain timestamps and omit the separately adjusted-close column. Volatility is annualized for every requested interval, uses 252/5 for five-day bars, and scales intraday periods for extended-hours sessions. RSI uses the canonical Wilder simple-average seed followed by recursive smoothing, with defined zero-gain/loss behavior. When requested, option Greeks are theoretical European Black-Scholes estimates per share (theta per day; vega/rho per one percentage point); risk-free-rate metadata identifies the configured fallback.
 
-## Installation
-
-```bash
-# Install dependencies
-pip install mcp yfinance
-
-# Clone the repository
-git clone https://github.com/twolven/stockflow
-cd stockflow
+```powershell
+uv sync --locked
+uv run python stockflow.py
 ```
 
-## Usage
+The server uses stdio. Yahoo Finance is an unofficial personal-use source and may be delayed, incomplete, rate-limited, missing fields, or structurally changed. Dividends and American-style early exercise are not modeled in Greeks. Results are not investment advice or guaranteed real-time data.
 
-1. Clone the repository:
-```bash
-git clone https://github.com/twolven/mcp-stockflow.git
-cd mcp-stockflow
+## Docker / Streamable HTTP
+
+The container runs as an unprivileged user, installs the locked production dependencies, and serves MCP at `http://127.0.0.1:8000/mcp`. Start it with:
+
+```powershell
+docker compose up --build -d
+Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+Connect a Streamable HTTP-capable MCP client to `http://127.0.0.1:8000/mcp`. To avoid a port collision when running multiple servers, set `MCP_HOST_PORT` before starting Compose, for example `$env:MCP_HOST_PORT=8003`. Stop and remove the container with `docker compose down`.
 
-3. Add to your Claude configuration:
-In your `claude-desktop-config.json`, add the following to the `mcpServers` section:
+The Compose mapping intentionally binds to localhost. The endpoint has no authentication or TLS and must not be exposed to an untrusted network without a properly configured reverse proxy and access control.
 
-```json
-{
-    "mcpServers": {
-        "stockflow": {
-            "command": "python",
-            "args": ["path/to/stockflow.py"]
-        }
-    }
-}
-```
+Binding to loopback alone does not make the endpoint private: a browser can still reach it through DNS rebinding, so the server validates `Host` and `Origin` headers before a request reaches an MCP session. Requests carrying a foreign `Host` are answered with `421 Misdirected Request` and those carrying a foreign `Origin` with `403 Forbidden`, while same-origin loopback traffic and non-browser clients that send no `Origin` are unaffected.
 
-Replace "path/to/stockflow.py" with the full path to where you saved the stockflow.py file.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MCP_TRANSPORT` | `stdio` | `stdio`, `http`, or `streamable-http`. |
+| `MCP_HOST` | `127.0.0.1` | Interface the HTTP server binds. |
+| `MCP_PORT` | `8000` | Port inside the container. |
+| `MCP_PATH` | `/mcp` | Streamable HTTP endpoint path. |
+| `MCP_HOST_PORT` | `8000` | Host port Compose publishes on `127.0.0.1`. |
+| `MCP_HOST_ORIGIN_PROTECTION` | `true` | `true`, `auto`, or `false`. Disable only behind a proxy that performs the same validation. |
+| `MCP_ALLOWED_HOSTS` | unset | Comma-separated extra hostnames permitted in `Host`. |
+| `MCP_ALLOWED_ORIGINS` | unset | Comma-separated extra browser origins permitted in `Origin`. |
 
-## Usage Prompt for Claude
+Put the reverse-proxy hostname in `MCP_ALLOWED_HOSTS` when fronting the container, otherwise the guard rejects the proxied `Host`. Running `uv run python stockflow.py` remains the stdio-compatible default outside Docker.
 
-When working with Claude, you can use this prompt to help it understand the available tools:
-
-"I've enabled the stockflow tools which give you access to stock market data. You can use these three main functions:
-
-1. `get_stock_data` - Get comprehensive stock info:
-```python
-{
-    "symbol": "AAPL",
-    "include_financials": true,  # optional
-    "include_analysis": true,    # optional
-    "include_calendar": true     # optional
-}
-```
-
-2. `get_historical_data` - Get price history and technical indicators:
-```python
-{
-    "symbol": "AAPL",
-    "period": "1y",        # 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
-    "interval": "1d",      # 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
-    "prepost": false       # optional - include pre/post market data
-}
-```
-
-3. `get_options_chain` - Get options data:
-```python
-{
-    "symbol": "AAPL",
-    "expiration_date": "2024-12-20",  # optional - uses nearest date if not specified
-    "include_greeks": true            # optional
-}
-```
-
-All responses include current price data, error handling, and comprehensive market information."
-
-### Running the Server
-
-```bash
-python stockflow.py
-```
-
-### Using with MCP Client
-
-```python
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
-server_params = StdioServerParameters(
-    command="python",
-    args=["stockflow.py"]
-)
-
-async def run():
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            
-            # Get current stock data
-            result = await session.call_tool(
-                "get-stock-data", 
-                arguments={"symbol": "AAPL"}
-            )
-            
-            # Get options chain
-            options = await session.call_tool(
-                "get-options-chain",
-                arguments={
-                    "symbol": "AAPL",
-                    "expiration_date": "2024-12-20"
-                }
-            )
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(run())
-```
-
-## Available Tools
-
-1. `get-stock-data`
-   - Current price and volume
-   - Market cap and P/E ratio
-   - 52-week high/low
-
-2. `get-historical-data`
-   - OHLC prices
-   - Configurable time periods
-   - Volume data
-
-3. `get-options-chain`
-   - Calls and puts
-   - Strike prices
-   - Greeks and IV
-   - Volume and open interest
-
-## Available Resources
-
-1. `company-info://{symbol}`
-   - Company description
-   - Sector and industry
-   - Employee count
-   - Website
-
-2. `financials://{symbol}`
-   - Income statement
-   - Balance sheet
-   - Cash flow statement
-
-## Prompts
-
-1. `analyze-options`
-   - Options strategy analysis
-   - Risk/reward evaluation
-   - Market condition assessment
-
-## Requirements
-
-- Python 3.12+
-- mcp
-- yfinance
-
-## Limitations
-
-- Data is sourced from Yahoo Finance and may have delays
-- Options data availability depends on market hours
-- Rate limits apply based on Yahoo Finance API restrictions
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Author
-
-[Todd Wolven](https://toddwolven.com/) - Lead AI Software Developer and open-source GenAI engineer
-
-## Acknowledgments
-
-- Built with the Model Context Protocol (MCP) by Anthropic
-- Data provided by [Yahoo Finance](https://finance.yahoo.com/)
-- Developed for use with Anthropic's Claude
+Run validation with `uv lock --check`, `uv run ruff check .`, `uv run mypy .`, `uv run pytest`, `uv build`, and `uv run python scripts/verify_wheel.py`. CI also builds the container and performs health plus MCP tool-discovery checks over Streamable HTTP. Domain/provider branch coverage is gated at 90%. Set `YFINANCE_LIVE=1` to opt into live shape smoke tests.
