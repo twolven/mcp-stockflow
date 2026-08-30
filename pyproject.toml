@@ -3,7 +3,7 @@ name = "mcp-stockflow"
 version = "2.1.0"
 description = "Typed FastMCP tools for Yahoo Finance stock data"
 requires-python = ">=3.12,<3.15"
-dependencies = ["fastmcp==3.4.7", "mcp==1.29.1", "yfinance==1.7.0", "pandas==3.0.5", "numpy==2.5.2", "pydantic==2.13.5"]
+dependencies = ["fastmcp==3.4.7", "mcp==1.29.1", "yfinance==1.7.0", "pandas==3.0.5", "numpy==2.5.2", "pydantic==2.13.5", "starlette==1.6.0"]
 
 [dependency-groups]
 dev = [

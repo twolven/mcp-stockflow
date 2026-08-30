@@ -1,10 +1,13 @@
 import math
+import os
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from .domain import add_indicators, annualized_volatility, black_scholes_greeks
 from .models import Expiration, Interval, Period, ResponseEnvelope, Symbol
@@ -12,6 +15,12 @@ from .provider import ProviderError, YahooProvider, clean, envelope
 
 mcp = FastMCP("stockflow")
 provider = YahooProvider()
+
+
+@mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
+async def health(_request: Request) -> JSONResponse:
+    """Report process health without invoking Yahoo Finance."""
+    return JSONResponse({"status": "ok", "service": "stockflow"})
 
 
 def _price(info):
@@ -238,4 +247,16 @@ def get_options_chain_v2(
 
 
 def main():
-    mcp.run(transport="stdio", show_banner=False)
+    transport = os.getenv("MCP_TRANSPORT", "stdio")
+    if transport == "stdio":
+        mcp.run(transport="stdio", show_banner=False)
+        return
+    if transport not in {"http", "streamable-http"}:
+        raise ValueError("MCP_TRANSPORT must be stdio, http, or streamable-http")
+    mcp.run(
+        transport="streamable-http",
+        host=os.getenv("MCP_HOST", "127.0.0.1"),
+        port=int(os.getenv("MCP_PORT", "8000")),
+        path=os.getenv("MCP_PATH", "/mcp"),
+        show_banner=False,
+    )

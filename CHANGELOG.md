@@ -7,3 +7,4 @@
 - Added controlled tool errors and provider/as-of/warning metadata.
 - Corrected canonical Wilder seeding, extended-hours and five-day volatility scaling, expiration-close handling, rate metadata, schemas, retries/cache, captured fixtures, and branch-coverage gates.
 - Replaced the interval self-reference regression with a hardcoded weekly annualization oracle.
+- Added a non-root Docker/Compose deployment with localhost-bound Streamable HTTP, health checks, and an end-to-end container contract gate.

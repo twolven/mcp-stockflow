@@ -1,6 +1,6 @@
 # StockFlow MCP
 
-A typed FastMCP stdio server for stock metadata, price history, technical indicators, financial statements, calendars, and option chains through yfinance.
+A typed FastMCP server for stock metadata, price history, technical indicators, financial statements, calendars, and option chains through yfinance. It supports local stdio and containerized Streamable HTTP transports.
 
 ## Tools
 
@@ -17,4 +17,17 @@ uv run python stockflow.py
 
 The server uses stdio. Yahoo Finance is an unofficial personal-use source and may be delayed, incomplete, rate-limited, missing fields, or structurally changed. Dividends and American-style early exercise are not modeled in Greeks. Results are not investment advice or guaranteed real-time data.
 
-Run validation with `uv lock --check`, `uv run ruff check .`, `uv run mypy .`, `uv run pytest`, `uv build`, and `uv run python scripts/verify_wheel.py`. Domain/provider branch coverage is gated at 90%. Set `YFINANCE_LIVE=1` to opt into live shape smoke tests.
+## Docker / Streamable HTTP
+
+The container runs as an unprivileged user, installs the locked production dependencies, and serves MCP at `http://127.0.0.1:8000/mcp`. Start it with:
+
+```powershell
+docker compose up --build -d
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+Connect a Streamable HTTP-capable MCP client to `http://127.0.0.1:8000/mcp`. To avoid a port collision when running multiple servers, set `MCP_HOST_PORT` before starting Compose, for example `$env:MCP_HOST_PORT=8003`. Stop and remove the container with `docker compose down`.
+
+The Compose mapping intentionally binds to localhost. The endpoint has no authentication or TLS and must not be exposed to an untrusted network without a properly configured reverse proxy and access control. Running `uv run python stockflow.py` remains the stdio-compatible default outside Docker.
+
+Run validation with `uv lock --check`, `uv run ruff check .`, `uv run mypy .`, `uv run pytest`, `uv build`, and `uv run python scripts/verify_wheel.py`. CI also builds the container and performs health plus MCP tool-discovery checks over Streamable HTTP. Domain/provider branch coverage is gated at 90%. Set `YFINANCE_LIVE=1` to opt into live shape smoke tests.
